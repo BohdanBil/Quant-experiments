@@ -45,5 +45,33 @@ plt.plot(portfolio_sims)
 plt.ylabel('Portfolio Value ($)')
 plt.xlabel('Days')
 plt.title('Monte Carlo Simulation: Portfolio Performance')
-plt.show()                             
-                                   
+plt.show()
+
+def mcVaR(returns, alpha=5):
+    """ Input: pandas Series of returns
+        Output: percentile on return distribution to a given confidence level alpha
+    """
+    if isinstance(returns, pd.Series):
+        return np.percentile(returns, alpha)
+    else:
+        raise TypeError("Expected returns to be a pandas Series")
+
+
+def mcCVaR(returns, alpha=5):
+    """ Input: pandas Series of returns
+        Output: CVaR or Expected Shortfall to a given confidence level alpha
+    """
+    if isinstance(returns, pd.Series):
+        belowVaR = returns <= mcVaR(returns, alpha=alpha)
+        return returns[belowVaR].mean()
+    else:
+        raise TypeError("Expected returns to be a pandas Series")
+
+
+portfolioReturns = pd.Series(portfolio_sims[-1, :])
+
+VaR = mcVaR(portfolioReturns, alpha=5)
+CVaR = mcCVaR(portfolioReturns, alpha=5)
+
+print('VaR ${}'.format(round(VaR, 2)))
+print('CVaR ${}'.format(round(CVaR, 2)))

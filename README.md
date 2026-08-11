@@ -1,28 +1,32 @@
-# Portfolio Monte Carlo Simulation
+# Monte-Carlo-simulations
 
-Симуляція методом Монте-Карло для оцінки ризику портфеля з акцій Австралійської біржі (ASX).
+Monte Carlo simulation for estimating portfolio risk (Value at Risk / Conditional Value at Risk) on a basket of ASX-listed stocks.
 
-## Що робить скрипт
+## What it does
 
-1. Завантажує історичні ціни закриття за останні 300 днів для шести акцій (`CBA`, `BHP`, `TLS`, `WBC`, `NAB`, `STO`) через `yfinance`.
-2. Рахує середню денну дохідність і коваріаційну матрицю дохідностей.
-3. Генерує випадкові ваги портфеля.
-4. Запускає 100 симуляцій руху портфеля вартістю $10,000 на горизонті 100 днів, використовуючи декомпозицію Холецького для врахування кореляції між активами.
-5. Малює графік усіх симульованих траєкторій вартості портфеля.
+1. Downloads 300 days of historical closing prices for six stocks (`CBA`, `BHP`, `TLS`, `WBC`, `NAB`, `STO`) via `yfinance`.
+2. Computes mean daily returns and the covariance matrix of returns.
+3. Generates random portfolio weights.
+4. Runs 100 Monte Carlo simulations of a $10,000 portfolio over a 100-day horizon, using Cholesky decomposition to preserve correlation between assets.
+5. Plots all simulated portfolio value paths.
+6. Computes **VaR** (Value at Risk) and **CVaR** (Conditional VaR / Expected Shortfall) at a 95% confidence level (alpha = 5%) on the simulated ending portfolio values:
+   - **VaR** — the portfolio value below which the worst 5% of simulated outcomes fall.
+   - **CVaR** — the average portfolio value across those worst 5% of outcomes (always more conservative than VaR).
 
-## Встановлення
+## Installation
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Запуск
+## Usage
 
 ```bash
 python main.py
 ```
 
-## Структура
+Prints `VaR` and `CVaR` in dollars, and opens a plot of the 100 simulated portfolio paths.
 
-- `main.py` — основний скрипт (завантаження даних + Monte Carlo симуляція)
-# Monte-Carlo-simulations
+## Project structure
+
+- `main.py` — main script (data download + Monte Carlo simulation + VaR/CVaR)
