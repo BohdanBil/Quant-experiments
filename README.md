@@ -25,3 +25,4 @@ python main.py
 ## Структура
 
 - `main.py` — основний скрипт (завантаження даних + Monte Carlo симуляція)
+# Monte-Carlo-simulations
