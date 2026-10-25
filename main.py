@@ -10,6 +10,7 @@ charts to results/.
 """
 import argparse
 import datetime as dt
+import json
 import textwrap
 from pathlib import Path
 
@@ -17,7 +18,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from portfolio_risk import backtest, data, plots, risk
+from portfolio_risk import backtest, dashboard, data, plots, risk
 from portfolio_risk.models import FilteredHistoricalModel, NormalModel, StudentTModel
 from portfolio_risk.simulation import simulate
 from portfolio_risk.volatility import HAR, GJRGarch, ewma_variance
@@ -179,14 +180,16 @@ def main():
                 f"The original script's assumptions give a VaR 99% of "
                 f"{aud(risk.var_es(original.pnl(horizon), 0.01)[0])}.")
 
+    vol = {
+        "now (HAR)": models[-1].sigma * np.sqrt(252),
+        "now (GJR-GARCH)": models[-2].sigma * np.sqrt(252),
+        "now (EWMA)": np.sqrt(ewma_variance(log_r.to_numpy())[-1] * 252),
+        "10-year average": (log_r.iloc[-VOL_WINDOW:].std() * np.sqrt(252)).to_numpy(),
+    }
     out += heading("1. Volatility by stock (annualised)")
-    out += pd.DataFrame({
-        "now (HAR)": [f"{v:.1%}" for v in models[-1].sigma * np.sqrt(252)],
-        "now (GJR-GARCH)": [f"{v:.1%}" for v in models[-2].sigma * np.sqrt(252)],
-        "now (EWMA)": [f"{v:.1%}" for v in np.sqrt(ewma_variance(log_r.to_numpy())[-1] * 252)],
-        "10-year average": [f"{v:.1%}" for v in log_r.iloc[-VOL_WINDOW:].std() * np.sqrt(252)],
-        "leverage": [f"{x:.3f}" for x in models[-2].vol.gamma],
-    }, index=tickers).to_string().splitlines()
+    out += pd.DataFrame({**{k: [f"{v:.1%}" for v in x] for k, x in vol.items()},
+                         "leverage": [f"{x:.3f}" for x in models[-2].vol.gamma]},
+                        index=tickers).to_string().splitlines()
     out += [""] + wrap("HAR forecasts tomorrow's volatility from the past day, week and month of "
                        "volatility (measured from each day's price range) and from recent falls. "
                        "Leverage (GARCH gamma): how much more a fall raises volatility than a rise.")
@@ -278,7 +281,30 @@ def main():
         (RESULTS / "backtest.png").unlink(missing_ok=True)    # don't leave a chart from an older run
     for name, fig in figures.items():
         plots.save(fig, RESULTS / f"{name}.png")
-    out += ["", f"Charts and this report saved to {RESULTS}/"]
+
+    # data for the web dashboard (python serve.py)
+    site = dashboard.portfolio_summary(sims, fhs, weights, value, days, log_r, STRESS_PERIODS,
+                                       STOP_LOSS, PUT_STRIKE)
+    site["meta"] = {
+        "generated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"), "tickers": tickers,
+        "data_start": log_r.index[0], "data_end": log_r.index[-1], "trading_days": len(log_r),
+        "paths": args.paths, "seed": args.seed, "window": WINDOW, "fhs_window": FHS_WINDOW,
+        "vol_window": VOL_WINDOW, "bad_opens": int(data.suspicious_opens(ohlc).values.sum()),
+        "original_model": original.model, "comparison_model": normal.model,
+    }
+    site["closed_form"] = {day: {key: value * risk.lognormal_var_es(sigma_1d * np.sqrt(day), a)[k]
+                                 for key, a, k in dashboard.MEASURES} for day in days}
+    site["historical_1d"] = {key: risk.var_es(hist_pnl, a)[k] for key, a, k in dashboard.MEASURES}
+    site["volatility"] = {"tickers": tickers, **vol, "leverage": models[-2].vol.gamma,
+                          "portfolio_now": fhs.pnl(1).std() / value * np.sqrt(252),
+                          "portfolio_average": sigma_1d * np.sqrt(252)}
+    site["min_variance"] = {"weights": min_var, "es": es_min_var, "es_current": es_total, "day": d}
+    site["convergence"] = dashboard.convergence_section(fhs, horizon)
+    site["market"] = dashboard.market_section(prices, simple_r, log_r, weights)
+    site["backtest"] = None if bt is None else dashboard.backtest_section(bt, list(bt.forecasts)[-1])
+    (RESULTS / "dashboard.json").write_text(json.dumps(dashboard.clean(site)))
+    out += ["", f"Charts, dashboard data and this report saved to {RESULTS}/ "
+                "(run python serve.py to open the dashboard)"]
 
     report = "\n".join(out)
     print(report)

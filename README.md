@@ -7,6 +7,23 @@ simulation under several return models, then tests the models against 20+ years 
 All numbers below come from `python main.py` on data up to 23 Oct 2026 (seed 42). The full
 output is in [results/report.txt](results/report.txt).
 
+## Interactive dashboard
+
+```bash
+python serve.py          # opens http://127.0.0.1:8000 in your browser
+```
+
+![Dashboard](results/dashboard.png)
+
+A local web page with the whole analysis as interactive charts (hover, zoom, toggle models):
+simulated futures, the distribution of outcomes, a model comparison, the 20-year backtest with
+zoom-to-crisis buttons, risk contributions, stress tests and market context. It also has a
+**what-if simulator**: change the weights, horizon or portfolio value and the server runs a
+fresh simulation (about 2 seconds for 25,000 paths over 100 days). A scenario can be shared as a link, for example
+`http://127.0.0.1:8000/?weights=CBA:40,BHP:20,TLS:10,WBC:10,NAB:10,STO:10&horizon=20`. There
+are light and dark themes. The server listens only on your own computer, and the charts load
+Plotly from a CDN, so the page needs an internet connection.
+
 ## Key results
 
 **100-day risk, A$ loss** (Monte Carlo standard error A$4–15)
@@ -168,12 +185,13 @@ light (99% breaches per 250 days), and the ratio of realised to forecast loss on
 
 ```bash
 pip install -r requirements.txt
-python main.py                                    # report + charts in results/ (~20 s)
+python main.py                                    # report, charts and dashboard data in results/ (~20 s)
+python serve.py                                   # interactive dashboard at http://127.0.0.1:8000
 python main.py --weights CBA=0.4,BHP=0.2,TLS=0.1,WBC=0.1,NAB=0.1,STO=0.1
 python main.py --horizon 10 --paths 50000 --skip-backtest
 python main.py --end today --refresh              # latest data instead of the cached snapshot
 python main.py --help                             # all options
-python -m unittest                                # 24 tests
+python -m unittest                                # 27 tests
 ```
 
 Tested with Python 3.14 and the package versions pinned in `requirements.txt`.
@@ -182,6 +200,7 @@ Tested with Python 3.14 and the package versions pinned in `requirements.txt`.
 
 ```
 main.py                  command-line entry point; builds the report
+serve.py                 local web server for the dashboard and what-if simulations
 portfolio_risk/
     data.py              download, cache and clean prices; range-based daily variance
     volatility.py        EWMA, GJR-GARCH and HAR volatility models
@@ -189,7 +208,9 @@ portfolio_risk/
     simulation.py        Monte Carlo engine (buy-and-hold paths)
     risk.py              VaR, ES, standard errors, Euler allocation, stress tests
     backtest.py          rolling 1-day backtest and its statistical tests
-    plots.py             charts
+    plots.py             static charts (PNG)
+    dashboard.py         turns results into JSON for the dashboard
+web/                     the dashboard page (HTML, CSS, JavaScript with Plotly)
 tests/                   unit tests
 results/                 report and charts from the last run
 ```

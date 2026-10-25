@@ -104,4 +104,4 @@ Christoffersen test (do breaches bunch up?); p below 0.05 rejects the model. Wor
 breaches in 250 days, Basel zones 0-4 green, 5-9 yellow, 10+ red. ES ratio = actual / forecast loss
 on breach days, ideally 1.
 
-Charts and this report saved to results/
+Charts, dashboard data and this report saved to results/ (run python serve.py to open the dashboard)

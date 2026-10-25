@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Portfolio Risk Lab</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#overview"><span class="brand-mark" aria-hidden="true"></span>Portfolio Risk Lab</a>
+      <nav aria-label="Sections">
+        <a href="#overview">Overview</a>
+        <a href="#futures">Futures</a>
+        <a href="#models">Models</a>
+        <a href="#backtest">Backtest</a>
+        <a href="#drivers">Risk drivers</a>
+        <a href="#market">Market</a>
+        <a href="#whatif">What-if</a>
+        <a href="#method">How it works</a>
+      </nav>
+      <button id="theme-toggle" class="ghost-button" type="button" aria-label="Switch colour theme">Theme: auto</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="fatal" class="notice notice-error" hidden></div>
+
+    <!-- Overview -->
+    <section id="overview" class="section">
+      <p class="eyebrow" id="portfolio-line">Loading results…</p>
+      <h1 id="headline" class="headline"></h1>
+      <p id="subheadline" class="lede"></p>
+      <div id="weights-strip" class="weights-strip" aria-label="Portfolio weights"></div>
+      <div id="kpis" class="kpi-grid"></div>
+    </section>
+
+    <!-- Simulated futures -->
+    <section id="futures" class="section">
+      <h2>Simulated futures</h2>
+      <p class="section-intro">100,000 possible paths for the portfolio, built from real historical days
+        rescaled to today's volatility. The bands show where most paths end up; the tails are what risk is about.</p>
+      <div class="card">
+        <div class="card-head">
+          <h3>Portfolio value over time</h3>
+          <div class="controls">
+            <label>Compare with
+              <select id="fan-compare"></select>
+            </label>
+            <label class="check"><input type="checkbox" id="fan-samples"> Show sample paths</label>
+          </div>
+        </div>
+        <div id="fan-chart" class="chart chart-tall" role="img" aria-label="Fan chart of simulated portfolio values"></div>
+      </div>
+      <div class="card">
+        <div class="card-head">
+          <h3>Distribution of profit and loss</h3>
+          <div class="controls">
+            <label>Horizon <select id="dist-horizon"></select></label>
+            <label class="check"><input type="checkbox" id="dist-log" checked> Log scale</label>
+          </div>
+        </div>
+        <div id="dist-models" class="chip-row" aria-label="Models shown"></div>
+        <div id="dist-chart" class="chart chart-tall" role="img" aria-label="Histogram of simulated profit and loss"></div>
+        <p class="note">On a log scale the rare, extreme outcomes become visible. Dashed lines mark the main
+          model's VaR and Expected Shortfall.</p>
+      </div>
+    </section>
+
+    <!-- Models -->
+    <section id="models" class="section">
+      <h2>How the models compare</h2>
+      <p class="section-intro">The same portfolio, the same horizon, different assumptions about how markets behave.
+        Error bars show the Monte Carlo uncertainty (±2 standard errors).</p>
+      <div class="card">
+        <div class="card-head">
+          <h3>Risk by model</h3>
+          <div class="controls">
+            <label>Horizon <select id="models-horizon"></select></label>
+            <label>Measure
+              <select id="models-measure">
+                <option value="var99">VaR 99%</option>
+                <option value="es975">Expected Shortfall 97.5%</option>
+                <option value="var95">VaR 95%</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div id="models-chart" class="chart" role="img" aria-label="Bar chart of risk by model"></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>How many simulations are enough?</h3>
+          <div id="convergence-chart" class="chart" role="img" aria-label="Spread of VaR estimates against number of simulations"></div>
+          <p class="note" id="convergence-note"></p>
+        </div>
+        <div class="card">
+          <h3>All numbers</h3>
+          <div id="risk-table" class="table-wrap"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Backtest -->
+    <section id="backtest" class="section">
+      <h2>Backtest: would the models have worked?</h2>
+      <p class="section-intro">Every trading day since 2004, each model forecast the next day's 99% VaR using only
+        earlier data. A good model is beaten on about 1% of days, and those days don't bunch together.</p>
+      <div class="card">
+        <div class="card-head">
+          <h3>Daily losses against the forecast</h3>
+          <div class="controls"><label>Model <select id="bt-model"></select></label></div>
+        </div>
+        <div id="bt-stats" class="mini-stats"></div>
+        <div id="bt-chart" class="chart chart-tall" role="img" aria-label="Daily losses and VaR forecast over time"></div>
+        <p class="note">Drag the slider below the chart to zoom into a crisis. Red dots are days when the loss beat the forecast.</p>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Breach rate by model</h3>
+          <div id="bt-rates" class="chart" role="img" aria-label="99% VaR breach rate by model"></div>
+        </div>
+        <div class="card">
+          <h3>Does it hold in every market regime?</h3>
+          <div id="bt-regimes" class="table-wrap"></div>
+          <p class="note">✓ means the 99% breach rate is right and breaches don't cluster in that period.</p>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Test results</h3>
+        <div id="bt-table" class="table-wrap"></div>
+      </div>
+    </section>
+
+    <!-- Risk drivers -->
+    <section id="drivers" class="section">
+      <h2>What drives the risk</h2>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Share of money vs share of risk</h3>
+          <div id="contrib-chart" class="chart" role="img" aria-label="Weights and risk contributions by stock"></div>
+          <p class="note" id="minvar-note"></p>
+        </div>
+        <div class="card">
+          <h3>Historical stress tests</h3>
+          <div id="stress-chart" class="chart" role="img" aria-label="Losses in historical crises"></div>
+          <p class="note">Today's portfolio replayed through real crises, compared with the model's Expected Shortfall.</p>
+        </div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Worst drop along the way</h3>
+          <div id="drawdown-chart" class="chart" role="img" aria-label="Distribution of maximum drawdown"></div>
+          <p class="note" id="drawdown-note"></p>
+        </div>
+        <div class="card">
+          <h3>Insurance: a protective put</h3>
+          <div id="put-chart" class="chart" role="img" aria-label="Risk before and after buying a put option"></div>
+          <p class="note" id="put-note"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Market -->
+    <section id="market" class="section">
+      <h2>Market context</h2>
+      <div class="card">
+        <div class="card-head">
+          <h3>Growth of A$100 invested in January 2000 (dividends reinvested)</h3>
+          <div class="controls"><label class="check"><input type="checkbox" id="growth-log" checked> Log scale</label></div>
+        </div>
+        <div id="growth-chart" class="chart chart-tall" role="img" aria-label="Growth of each stock since 2000"></div>
+      </div>
+      <div class="grid-2">
+        <div class="card">
+          <h3>Portfolio volatility over time</h3>
+          <div id="vol-chart" class="chart" role="img" aria-label="Rolling volatility of the portfolio"></div>
+          <p class="note">Three-month realised volatility, annualised. Shaded: the financial crisis and the COVID crash.</p>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h3>How the stocks move together</h3>
+            <div class="controls"><label>Period <select id="corr-window"></select></label></div>
+          </div>
+          <div id="corr-chart" class="chart" role="img" aria-label="Correlation heatmap"></div>
+          <p class="note" id="corr-note"></p>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Volatility by stock: now vs normal</h3>
+        <div id="stockvol-chart" class="chart" role="img" aria-label="Current and average volatility by stock"></div>
+      </div>
+    </section>
+
+    <!-- What-if -->
+    <section id="whatif" class="section">
+      <h2>What-if simulator</h2>
+      <p class="section-intro">Change the weights or the horizon and run a fresh simulation with the main model.</p>
+      <div class="card whatif-card">
+        <form id="whatif-form" class="whatif-form">
+          <div id="whatif-weights" class="weight-inputs"></div>
+          <div class="whatif-side">
+            <div class="preset-row">
+              <button type="button" class="ghost-button" data-preset="equal">Equal weights</button>
+              <button type="button" class="ghost-button" data-preset="minvar">Minimum variance</button>
+            </div>
+            <p id="whatif-total" class="total-line"></p>
+            <label>Horizon (trading days)
+              <select id="whatif-horizon">
+                <option>10</option><option>20</option><option>50</option><option selected>100</option><option>250</option>
+              </select>
+            </label>
+            <label>Simulated paths
+              <select id="whatif-paths">
+                <option value="10000">10,000 (fastest)</option><option value="25000" selected>25,000</option>
+                <option value="50000">50,000 (most precise)</option>
+              </select>
+            </label>
+            <label>Portfolio value (A$)
+              <input id="whatif-value" type="number" min="100" step="100" value="10000">
+            </label>
+            <button id="whatif-run" class="primary-button" type="submit">Run simulation</button>
+            <p id="whatif-status" class="status-line" role="status"></p>
+          </div>
+        </form>
+      </div>
+      <div id="whatif-results" hidden>
+        <div id="whatif-kpis" class="kpi-grid"></div>
+        <div class="card">
+          <h3>Simulated portfolio value</h3>
+          <div id="whatif-fan" class="chart chart-tall" role="img" aria-label="Fan chart for the custom portfolio"></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <h3>Share of money vs share of risk</h3>
+            <div id="whatif-contrib" class="chart" role="img" aria-label="Risk contributions for the custom portfolio"></div>
+          </div>
+          <div class="card">
+            <h3>Historical stress tests</h3>
+            <div id="whatif-stress" class="chart" role="img" aria-label="Crisis losses for the custom portfolio"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Method -->
+    <section id="method" class="section">
+      <h2>How it works</h2>
+      <div class="card prose">
+        <details open>
+          <summary>Value at Risk and Expected Shortfall</summary>
+          <p><b>VaR 99%</b> is the loss that is exceeded only 1 time in 100. <b>Expected Shortfall 97.5%</b>
+            answers the follow-up question: when things are worse than that line, how bad on average? It looks at the
+            worst 2.5% of outcomes, which is why banking regulation (Basel FRTB) prefers it.</p>
+        </details>
+        <details>
+          <summary>Monte Carlo simulation</summary>
+          <p>Instead of one formula, the model generates 100,000 possible futures and reads the risk off them.
+            That handles things formulas cannot: holding stocks without rebalancing, options with kinked payoffs, and
+            the worst drop along the way. The cost is noise, which is why the numbers carry ± standard errors and the
+            convergence chart shows how many paths are needed.</p>
+        </details>
+        <details>
+          <summary>Filtered historical simulation with HAR volatility (the main model)</summary>
+          <p>Each historical day is converted into a "shock": the day's returns divided by how volatile the market was
+            expected to be. A simulated day picks a random historical day and replays its shocks at today's volatility,
+            which keeps real fat tails and the real way the stocks moved together.</p>
+          <p>Volatility comes from a HAR model. It measures each day's volatility from its open, high, low and close,
+            not just the close, and forecasts tomorrow's from the past day, week and month, plus recent falls.
+            Having three time scales lets it handle both short spikes and slower changes in the market's mood.</p>
+        </details>
+        <details>
+          <summary>Backtesting</summary>
+          <p>The models are re-fitted every day using only past data, and their 1-day VaR is compared with what
+            actually happened. The <b>Kupiec test</b> checks the breach rate; the <b>Christoffersen test</b> checks that
+            breaches don't cluster; the <b>Basel traffic light</b> counts breaches per 250 days (0–4 green, 5–9 yellow,
+            10+ red); the <b>ES ratio</b> compares actual and forecast losses on breach days.</p>
+        </details>
+        <details>
+          <summary>Data and its limits</summary>
+          <p>Dividend-adjusted daily prices from Yahoo Finance since 2000. Holiday rows and bad opening prices are
+            cleaned. Expected returns are set to zero, because two years of data can't estimate them and an optimistic
+            drift would shrink the risk. There are no transaction costs or currency effects, and the 100-day numbers
+            come from a daily model (only the 1-day forecasts are backtested). This is a study, not investment advice.</p>
+        </details>
+        <p><a href="/report.txt">Full text report</a></p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p id="footer-line"></p>
+  </footer>
+</body>
+</html>
