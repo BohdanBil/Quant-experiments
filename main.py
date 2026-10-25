@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from portfolio_risk import backtest, data, plots, risk
-from portfolio_risk.models import FilteredHistoricalModel, NormalModel, StudentTModel
+from portfolio_risk.models import FilteredHistoricalModel, GJRGarch, NormalModel, StudentTModel
 from portfolio_risk.simulation import simulate
 
 TICKERS = ["CBA", "BHP", "TLS", "WBC", "NAB", "STO"]
@@ -29,6 +29,7 @@ PATHS = 100_000
 SEED = 42
 WINDOW = 500                              # days used to fit the normal and Student-t models
 FHS_WINDOW = 1_000                        # days of shocks the filtered HS model draws from
+GARCH_WINDOW = 2_520                      # days used to fit the GARCH volatility model (~10 years)
 ORIGINAL_WINDOW = 205                     # ~300 calendar days, as in the first version
 STRESS_PERIODS = {
     "GFC, Lehman collapse to market low": ("2008-09-12", "2009-03-06"),
@@ -146,11 +147,12 @@ def main():
         NormalModel(recent),
         StudentTModel(recent),
         FilteredHistoricalModel(log_r, window=FHS_WINDOW),
+        FilteredHistoricalModel(log_r, window=FHS_WINDOW, vol=GJRGarch(), fit_window=GARCH_WINDOW),
     ]
     # every model gets the same seed, so each run of the script gives the same numbers
     sims = [simulate(m, weights, value, horizon, args.paths, np.random.default_rng(args.seed), days)
             for m in models]
-    original, normal, student_t, fhs = sims
+    original, normal, student_t, fhs_ewma, fhs = sims    # fhs (GJR-GARCH) is the main model
     end_pnl = fhs.pnl(horizon)
 
     out = [f"Portfolio risk report: {', '.join(tickers)} (ASX)",
@@ -158,25 +160,42 @@ def main():
            f"{log_r.index[-1]:%Y-%m-%d}, dividend-adjusted closes",
            f"Portfolio: {aud(value)} bought today and held (no rebalancing): "
            + ", ".join(f"{t} {x:.1%}" for t, x in weights.items()),
-           f"Models fitted on the last {WINDOW} days (filtered HS: EWMA volatility and "
-           f"{FHS_WINDOW:,} days of shocks). Expected returns set to 0 (no drift).",
+           f"Models fitted on the last {WINDOW} days; filtered HS draws from {FHS_WINDOW:,} days of "
+           f"shocks with EWMA or GJR-GARCH volatility (GARCH fitted on {GARCH_WINDOW:,} days).",
+           f"Expected returns set to 0 (no drift). Main model: {fhs.model}, the best in the "
+           "backtest (section 6).",
            f"Monte Carlo: {args.paths:,} paths per model, seed {args.seed}.",
-           f"Daily volatility: {fhs.pnl(1).std() / value:.2%} now (EWMA) vs {sigma_1d:.2%} "
+           f"Daily volatility: {fhs.pnl(1).std() / value:.2%} now (GJR-GARCH) vs {sigma_1d:.2%} "
            f"on average over the last {WINDOW} days."]
     out += heading("Headline")
     out += wrap(f"Over the next {horizon} trading days there is a 1-in-100 chance of losing more than "
-                f"{aud(risk.var_es(end_pnl, 0.01)[0])} (VaR 99%, filtered HS model); in the worst 2.5% "
+                f"{aud(risk.var_es(end_pnl, 0.01)[0])} (VaR 99%, {fhs.model}); in the worst 2.5% "
                 f"of outcomes the average loss is {aud(risk.var_es(end_pnl, 0.025)[1])} (ES 97.5%). "
                 f"The original script's assumptions give a VaR 99% of "
                 f"{aud(risk.var_es(original.pnl(horizon), 0.01)[0])}.")
 
-    out += heading("1. Value at Risk and Expected Shortfall (loss in AUD; ± is Monte Carlo standard error)")
+    garch = models[-1].vol
+    out += heading("1. Volatility by stock (annualised)")
+    out += pd.DataFrame({
+        "now (GJR-GARCH)": [f"{v:.1%}" for v in models[-1].sigma * np.sqrt(252)],
+        "now (EWMA)": [f"{v:.1%}" for v in models[-2].sigma * np.sqrt(252)],
+        "long run": [f"{v:.1%}" for v in np.sqrt(garch.long_run_variance * 252)],
+        "half-life (days)": [f"{h:.0f}" for h in np.log(0.5) / np.log(garch.persistence)],
+        "alpha": [f"{x:.3f}" for x in garch.alpha],
+        "gamma": [f"{x:.3f}" for x in garch.gamma],
+        "beta": [f"{x:.3f}" for x in garch.beta],
+    }, index=tickers).to_string().splitlines()
+    out += [""] + wrap("GJR-GARCH: tomorrow's variance = omega + (alpha, plus gamma if the stock fell) "
+                       "x today's squared return + beta x today's variance. Half-life: days for a "
+                       "volatility shock to fade by half.")
+
+    out += heading("2. Value at Risk and Expected Shortfall (loss in AUD; ± is Monte Carlo standard error)")
     hist_pnl = value * (simple_r.iloc[-WINDOW:].to_numpy() @ w)
     out += risk_table(sims, sigma_1d, hist_pnl, value, days).to_string().splitlines()
     lo, _, hi = risk.sampling_spread(end_pnl, 0.01, 100)[0]
     se = risk.mc_standard_error(end_pnl, 0.01)[0]
     out += [""] + wrap(f"Precision: with the original 100 paths, 90% of runs would put the {horizon}-day "
-                       f"VaR 99% (filtered HS) anywhere from {aud(lo)} to {aud(hi)}. With "
+                       f"VaR 99% ({fhs.model}) anywhere from {aud(lo)} to {aud(hi)}. With "
                        f"{args.paths:,} paths it is {aud(risk.var_es(end_pnl, 0.01)[0])} ± {se:,.0f}.")
     boot = value * risk.bootstrap_normal_var(recent, w, 0.01, np.random.default_rng(args.seed))
     out += wrap(f"Parameter risk: re-fitting the normal model on resampled copies of its {WINDOW} days "
@@ -186,7 +205,7 @@ def main():
     d = 10 if 10 in days else horizon
     comp = risk.component_es(fhs.holdings_pnl(d), 0.025)
     es_total = comp.sum()
-    out += heading(f"2. Where the risk comes from ({d}-day ES 97.5%, filtered HS: {aud(es_total)})")
+    out += heading(f"3. Where the risk comes from ({d}-day ES 97.5%, {fhs.model}: {aud(es_total)})")
     out += pd.DataFrame({"weight": weights.map("{:.1%}".format),
                          "ES contribution": [aud(c) for c in comp],
                          "share of ES": [f"{c / es_total:.1%}" for c in comp]},
@@ -198,10 +217,10 @@ def main():
                        + f". Their {d}-day ES 97.5% is {aud(es_min_var)} vs {aud(es_total)} for the "
                        "current weights (fitted on the same data, so somewhat optimistic).")
 
-    out += heading(f"3. Path risk over {horizon} days (what a single end-date VaR misses)")
+    out += heading(f"4. Path risk over {horizon} days (what a single end-date VaR misses)")
     floor = value * (1 - STOP_LOSS)
     path_risk = {}
-    for sim in (normal, student_t, fhs):
+    for sim in (normal, student_t, fhs_ewma, fhs):
         drawdown = risk.max_drawdown(sim.values)
         path_risk[sim.model] = {
             "median max drawdown": f"{np.median(drawdown):.1%}",
@@ -220,7 +239,7 @@ def main():
         f"{aud(risk.var_es(hedged, 0.025)[1])}. The put's kinked payoff is easy to simulate but "
         "breaks closed-form (normal) VaR.")
 
-    out += heading("4. Historical stress tests (today's weights, bought and held)")
+    out += heading("5. Historical stress tests (today's weights, bought and held)")
     for name, (start, end) in STRESS_PERIODS.items():
         if log_r.index[0] < pd.Timestamp(start):
             loss = risk.stress_loss(log_r, weights, start, end)
@@ -233,8 +252,8 @@ def main():
 
     bt = None
     if not args.skip_backtest:
-        bt = backtest.run_backtest(simple_r, weights, WINDOW, FHS_WINDOW, ORIGINAL_WINDOW)
-        out += heading(f"5. Backtest of 1-day VaR, re-fitted every day: {bt.dates[0]:%Y-%m-%d} to "
+        bt = backtest.run_backtest(simple_r, weights, WINDOW, FHS_WINDOW, ORIGINAL_WINDOW, GARCH_WINDOW)
+        out += heading(f"6. Backtest of 1-day VaR, re-fitted every day: {bt.dates[0]:%Y-%m-%d} to "
                        f"{bt.dates[-1]:%Y-%m-%d} ({len(bt.losses):,} days)")
         out += backtest_table(backtest.summary(bt)).to_string().splitlines()
         out += [""] + wrap("Targets: breaches 5% and 1% of days. p = Kupiec test of the breach rate; "

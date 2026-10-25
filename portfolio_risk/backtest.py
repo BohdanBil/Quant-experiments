@@ -10,7 +10,7 @@ import pandas as pd
 from scipy import stats
 from scipy.special import xlogy
 
-from .models import ewma_variance, fit_t_dof
+from .models import EWMA, GJRGarch, fit_t_dof
 from .risk import normal_var_es, student_t_var_es, var_es
 
 LEVELS = (0.05, 0.025, 0.01)          # tail probabilities: 95%, 97.5% and 99%
@@ -30,24 +30,25 @@ class Backtest:
 
 
 def run_backtest(returns, weights, window=500, fhs_window=1000, original_window=205,
-                 lam=0.94, refit_every=20):
-    """1-day forecasts from five models, for every day once all of them have enough history.
+                 garch_window=2520, lam=0.94, refit_every=20):
+    """1-day forecasts from six models, for every day once all of them have enough history.
 
-    `returns` are daily simple returns; the Student-t degrees of freedom are refitted
-    every `refit_every` days (the volatility is updated daily).
+    `returns` are daily simple returns. The Student-t degrees of freedom and the GARCH
+    parameters are refitted every `refit_every` days; volatilities update daily.
     """
     r = returns.to_numpy()
     w = weights.loc[returns.columns].to_numpy(dtype=float)
     port = r @ w
-    sd = np.sqrt(ewma_variance(r, lam))       # sd[t]: volatility forecast for day t
-    shocks = r / sd[:-1]
-    start = fhs_window + 60                   # skip the EWMA warm-up period
+    ewma_sd = np.sqrt(EWMA(lam).variance(r))     # ewma_sd[t]: volatility forecast for day t
+    ewma_shocks = r / ewma_sd[:-1]
+    start = fhs_window + 60                      # skip the EWMA warm-up period
     names = {
         "original": f"Original main.py (normal + drift, {original_window}d)",
         "normal": f"Normal ({window}d)",
         "t": f"Student-t ({window}d)",
         "hs": f"Historical ({window}d)",
-        "fhs": f"Filtered HS (EWMA, {fhs_window}d)",
+        "ewma": f"Filtered HS + EWMA ({fhs_window}d)",
+        "garch": f"Filtered HS + GJR-GARCH ({fhs_window}d)",
     }
     out = {name: np.empty((len(r) - start, len(LEVELS), 2)) for name in names.values()}
     for i, t in enumerate(range(start, len(r))):
@@ -57,15 +58,26 @@ def run_backtest(returns, weights, window=500, fhs_window=1000, original_window=
         if i % refit_every == 0:
             x = r[t - window:t] - r[t - window:t].mean(axis=0)
             nu = fit_t_dof(x, np.cov(x, rowvar=False))
-        fhs = shocks[t - fhs_window:t] @ (w * sd[t])    # past shocks at today's volatility
-        fhs -= fhs.mean()
+            garch = GJRGarch().fit(r[max(0, t - garch_window):t])
+            stop = min(t + refit_every, len(r))
+            garch_sd = np.sqrt(garch.variance(r[:stop]))
+            garch_shocks = r[:stop] / garch_sd[:-1]
+        ewma = _filtered_sample(ewma_shocks, ewma_sd, t, w, fhs_window)
+        garch_fhs = _filtered_sample(garch_shocks, garch_sd, t, w, fhs_window)
         for j, alpha in enumerate(LEVELS):
             out[names["original"]][i, j] = normal_var_es(short.std(ddof=1), alpha, short.mean())
             out[names["normal"]][i, j] = normal_var_es(sigma, alpha)
             out[names["t"]][i, j] = student_t_var_es(sigma, nu, alpha)
             out[names["hs"]][i, j] = var_es(past, alpha)
-            out[names["fhs"]][i, j] = var_es(fhs, alpha)
+            out[names["ewma"]][i, j] = var_es(ewma, alpha)
+            out[names["garch"]][i, j] = var_es(garch_fhs, alpha)
     return Backtest(returns.index[start:], -port[start:], out)
+
+
+def _filtered_sample(shocks, sd, t, w, window):
+    """Possible returns for day t: the last `window` days of shocks at day t's volatility."""
+    sample = shocks[t - window:t] @ (w * sd[t])
+    return sample - sample.mean()
 
 
 def kupiec_pof(hits, alpha):

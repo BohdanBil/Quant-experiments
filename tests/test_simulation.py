@@ -4,7 +4,8 @@ import numpy as np
 import pandas as pd
 
 from portfolio_risk import risk
-from portfolio_risk.models import FilteredHistoricalModel, NormalModel, StudentTModel, fit_t_dof
+from portfolio_risk.models import (EWMA, FilteredHistoricalModel, GJRGarch, NormalModel,
+                                   StudentTModel, fit_gjr_garch, fit_t_dof, gjr_variance)
 from portfolio_risk.simulation import simulate
 
 
@@ -74,6 +75,44 @@ class ModelTest(unittest.TestCase):
         for model in (NormalModel(returns), StudentTModel(returns), FilteredHistoricalModel(returns)):
             growth = np.exp(model.sample(rng, 400_000, 1)[:, 0])
             np.testing.assert_allclose(growth.mean(axis=0), 1, atol=1e-4, err_msg=model.name)
+
+
+def simulate_gjr(n, omega, alpha, gamma, beta, rng):
+    r = np.empty(n)
+    var = omega / (1 - alpha - gamma / 2 - beta)
+    for t in range(n):
+        r[t] = np.sqrt(var) * rng.standard_normal()
+        var = omega + (alpha + gamma * (r[t] < 0)) * r[t] ** 2 + beta * var
+    return r
+
+
+class GarchTest(unittest.TestCase):
+    PARAMS = (3e-6, 0.04, 0.10, 0.88)        # omega, alpha, gamma, beta: long-run variance 1e-4
+
+    def test_variance_filter_matches_the_recursion(self):
+        r = np.random.default_rng(11).normal(0, 0.01, 500)
+        slow = [1e-4]
+        for x in r:
+            slow.append(2e-6 + (0.05 + 0.1 * (x < 0)) * x ** 2 + 0.85 * slow[-1])
+        np.testing.assert_allclose(gjr_variance(r, 2e-6, 0.05, 0.1, 0.85, 1e-4), slow, rtol=1e-10)
+
+    def test_fit_recovers_parameters(self):
+        r = simulate_gjr(20_000, *self.PARAMS, np.random.default_rng(12))
+        _, alpha, gamma, beta = fit_gjr_garch(r)
+        self.assertAlmostEqual(alpha, 0.04, delta=0.02)
+        self.assertAlmostEqual(gamma, 0.10, delta=0.04)
+        self.assertAlmostEqual(beta, 0.88, delta=0.03)
+
+    def test_garch_volatility_reverts_but_ewma_does_not(self):
+        garch = GJRGarch()
+        garch.omega, garch.alpha, garch.gamma, garch.beta = (np.array([p]) for p in self.PARAMS)
+        rng = np.random.default_rng(13)
+        start = np.full((50_000, 1), 4e-4)            # 4x the long-run variance
+        for vol, target in ((garch, 1e-4), (EWMA(), 4e-4)):
+            var = start
+            for _ in range(300):
+                var = vol.update(var, rng.standard_normal(var.shape) * np.sqrt(var))
+            self.assertAlmostEqual(var.mean() / target, 1, delta=0.1, msg=vol.name)
 
 
 if __name__ == "__main__":

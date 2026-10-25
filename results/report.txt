@@ -1,17 +1,31 @@
 Portfolio risk report: CBA, BHP, TLS, WBC, NAB, STO (ASX)
 Data: 6,795 trading days, 2000-01-04 to 2026-10-23, dividend-adjusted closes
 Portfolio: A$10,000 bought today and held (no rebalancing): CBA 16.7%, BHP 16.7%, TLS 16.7%, WBC 16.7%, NAB 16.7%, STO 16.7%
-Models fitted on the last 500 days (filtered HS: EWMA volatility and 1,000 days of shocks). Expected returns set to 0 (no drift).
+Models fitted on the last 500 days; filtered HS draws from 1,000 days of shocks with EWMA or GJR-GARCH volatility (GARCH fitted on 2,520 days).
+Expected returns set to 0 (no drift). Main model: Filtered HS + GJR-GARCH, the best in the backtest (section 6).
 Monte Carlo: 100,000 paths per model, seed 42.
-Daily volatility: 1.07% now (EWMA) vs 0.85% on average over the last 500 days.
+Daily volatility: 1.04% now (GJR-GARCH) vs 0.85% on average over the last 500 days.
 
 Headline
 --------
-Over the next 100 trading days there is a 1-in-100 chance of losing more than A$2,967 (VaR 99%,
-filtered HS model); in the worst 2.5% of outcomes the average loss is A$2,995 (ES 97.5%). The
+Over the next 100 trading days there is a 1-in-100 chance of losing more than A$2,221 (VaR 99%,
+Filtered HS + GJR-GARCH); in the worst 2.5% of outcomes the average loss is A$2,246 (ES 97.5%). The
 original script's assumptions give a VaR 99% of A$1,133.
 
-1. Value at Risk and Expected Shortfall (loss in AUD; ± is Monte Carlo standard error)
+1. Volatility by stock (annualised)
+-----------------------------------
+    now (GJR-GARCH) now (EWMA) long run half-life (days)  alpha  gamma   beta
+CBA           28.8%      25.8%    22.0%                6  0.108  0.081  0.739
+BHP           37.1%      33.9%    26.9%               17  0.052  0.053  0.881
+TLS           20.3%      18.0%    19.0%                5  0.124  0.000  0.749
+WBC           25.5%      24.4%    23.0%                5  0.161  0.183  0.617
+NAB           26.2%      26.9%    22.5%               11  0.099  0.139  0.771
+STO           26.1%      21.6%    34.9%               22  0.000  0.104  0.917
+
+GJR-GARCH: tomorrow's variance = omega + (alpha, plus gamma if the stock fell) x today's squared
+return + beta x today's variance. Half-life: days for a volatility shock to fade by half.
+
+2. Value at Risk and Expected Shortfall (loss in AUD; ± is Monte Carlo standard error)
 --------------------------------------------------------------------------------------
                                             VaR 95%       VaR 99%      ES 97.5%
 1 day    Closed form (normal)                 A$139         A$196         A$197
@@ -19,64 +33,68 @@ original script's assumptions give a VaR 99% of A$1,133.
          MC Original (normal + drift)    A$130 ±0.4    A$185 ±1.1    A$187 ±0.9
          MC Normal                       A$139 ±0.4    A$195 ±1.2    A$196 ±0.9
          MC Student-t (nu=4.8)           A$131 ±0.6    A$217 ±1.6    A$228 ±1.8
-         MC Filtered HS                  A$185 ±0.4    A$285 ±2.5    A$315 ±2.3
+         MC Filtered HS + EWMA           A$185 ±0.4    A$285 ±2.5    A$315 ±2.3
+         MC Filtered HS + GJR-GARCH      A$189 ±1.2    A$302 ±1.9    A$297 ±2.0
 10 days  Closed form (normal)                 A$435         A$609         A$611
          MC Original (normal + drift)    A$360 ±1.9    A$529 ±2.7    A$531 ±2.4
          MC Normal                       A$435 ±1.8    A$605 ±2.1    A$607 ±2.3
          MC Student-t (nu=4.8)           A$429 ±1.8    A$623 ±4.7    A$634 ±4.2
-         MC Filtered HS                  A$566 ±2.1    A$871 ±4.6    A$886 ±4.8
+         MC Filtered HS + EWMA           A$566 ±2.1    A$870 ±4.5    A$886 ±4.8
+         MC Filtered HS + GJR-GARCH      A$528 ±1.9    A$849 ±6.0    A$872 ±5.6
 100 days Closed form (normal)               A$1,335       A$1,822       A$1,826
          MC Original (normal + drift)    A$623 ±5.7  A$1,133 ±8.3  A$1,138 ±7.9
          MC Normal                     A$1,323 ±5.0  A$1,795 ±7.7  A$1,807 ±6.8
          MC Student-t (nu=4.8)         A$1,325 ±4.0  A$1,804 ±6.5  A$1,815 ±5.8
-         MC Filtered HS                A$1,967 ±8.7   A$2,967 ±22   A$2,995 ±18
+         MC Filtered HS + EWMA         A$1,966 ±8.8   A$2,958 ±21   A$2,988 ±18
+         MC Filtered HS + GJR-GARCH    A$1,494 ±7.5   A$2,221 ±14   A$2,246 ±15
 
-Precision: with the original 100 paths, 90% of runs would put the 100-day VaR 99% (filtered HS)
-anywhere from A$1,976 to A$3,544. With 100,000 paths it is A$2,967 ± 22.
+Precision: with the original 100 paths, 90% of runs would put the 100-day VaR 99% (Filtered HS +
+GJR-GARCH) anywhere from A$1,536 to A$2,626. With 100,000 paths it is A$2,221 ± 14.
 Parameter risk: re-fitting the normal model on resampled copies of its 500 days moves its 1-day VaR
 99% between A$178 and A$214 (90% range).
 
-2. Where the risk comes from (10-day ES 97.5%, filtered HS: A$886)
-------------------------------------------------------------------
+3. Where the risk comes from (10-day ES 97.5%, Filtered HS + GJR-GARCH: A$872)
+------------------------------------------------------------------------------
     weight ES contribution share of ES
-CBA  16.7%           A$207       23.3%
-BHP  16.7%           A$137       15.5%
-TLS  16.7%            A$54        6.1%
-WBC  16.7%           A$183       20.6%
-NAB  16.7%           A$198       22.4%
-STO  16.7%           A$107       12.1%
+CBA  16.7%           A$203       23.2%
+BHP  16.7%           A$125       14.3%
+TLS  16.7%            A$38        4.4%
+WBC  16.7%           A$197       22.6%
+NAB  16.7%           A$215       24.7%
+STO  16.7%            A$94       10.8%
 
 Long-only minimum-variance weights: CBA 8%, BHP 18%, TLS 58%, WBC 2%, NAB 10%, STO 5%. Their 10-day
-ES 97.5% is A$758 vs A$886 for the current weights (fitted on the same data, so somewhat
+ES 97.5% is A$657 vs A$872 for the current weights (fitted on the same data, so somewhat
 optimistic).
 
-3. Path risk over 100 days (what a single end-date VaR misses)
+4. Path risk over 100 days (what a single end-date VaR misses)
 --------------------------------------------------------------
-                         Normal Student-t (nu=4.8) Filtered HS
-median max drawdown        8.6%               8.4%       11.0%
-1-in-20 max drawdown      16.6%              16.6%       25.7%
-P(down 10% at any point)  20.5%              19.9%       33.9%
-P(down 10% on day 100)    11.5%              11.3%       19.0%
+                         Normal Student-t (nu=4.8) Filtered HS + EWMA Filtered HS + GJR-GARCH
+median max drawdown        8.6%               8.4%              11.0%                    8.6%
+1-in-20 max drawdown      16.6%              16.6%              25.7%                   19.4%
+P(down 10% at any point)  20.5%              19.9%              33.9%                   23.5%
+P(down 10% on day 100)    11.5%              11.3%              19.1%                   13.0%
 
-Protective put (strike 95%, expires day 100, fair premium under the model A$263): VaR 99% A$2,967 ->
-A$763, ES 97.5% A$2,995 -> A$763. The put's kinked payoff is easy to simulate but breaks closed-form
+Protective put (strike 95%, expires day 100, fair premium under the model A$164): VaR 99% A$2,221 ->
+A$664, ES 97.5% A$2,246 -> A$664. The put's kinked payoff is easy to simulate but breaks closed-form
 (normal) VaR.
 
-4. Historical stress tests (today's weights, bought and held)
+5. Historical stress tests (today's weights, bought and held)
 -------------------------------------------------------------
 GFC, Lehman collapse to market low (2008-09-12 to 2009-03-06): A$2,602 loss (26.0%)
 COVID crash (2020-02-20 to 2020-03-23): A$4,003 loss (40.0%)
-Worst 10-day loss since 2000: A$2,981 (29.8%), ending 2020-03-19. Model 10-day ES 97.5% today: A$886
-Worst 100-day loss since 2000: A$3,834 (38.3%), ending 2020-03-23. Model 100-day ES 97.5% today: A$2,995
+Worst 10-day loss since 2000: A$2,981 (29.8%), ending 2020-03-19. Model 10-day ES 97.5% today: A$872
+Worst 100-day loss since 2000: A$3,834 (38.3%), ending 2020-03-23. Model 100-day ES 97.5% today: A$2,246
 
-5. Backtest of 1-day VaR, re-fitted every day: 2004-02-25 to 2026-10-23 (5,735 days)
+6. Backtest of 1-day VaR, re-fitted every day: 2004-02-25 to 2026-10-23 (5,735 days)
 ------------------------------------------------------------------------------------
                                         breaches 95%  p 95% breaches 99%  p 99% clustering p worst year last year ES ratio
 Original main.py (normal + drift, 205d)        5.68%  0.020        2.14%  0.000        0.000     18 red   1 green     1.17
 Normal (500d)                                  5.27%  0.359        1.99%  0.000        0.000     18 red   0 green     1.23
 Student-t (500d)                               5.70%  0.017        1.57%  0.000        0.000     15 red   0 green     1.10
 Historical (500d)                              5.61%  0.036        1.45%  0.001        0.000     13 red   0 green     1.07
-Filtered HS (EWMA, 1000d)                      4.50%  0.077        0.99%  0.963        0.000   9 yellow   0 green     1.00
+Filtered HS + EWMA (1000d)                     4.50%  0.077        0.99%  0.963        0.000   9 yellow   0 green     1.00
+Filtered HS + GJR-GARCH (1000d)                4.71%  0.306        1.01%  0.931        0.003   9 yellow   0 green     1.01
 
 Targets: breaches 5% and 1% of days. p = Kupiec test of the breach rate; clustering p =
 Christoffersen test (do breaches bunch up?); p below 0.05 rejects the model. Worst/last year = 99%
