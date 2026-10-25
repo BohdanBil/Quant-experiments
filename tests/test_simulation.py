@@ -4,9 +4,9 @@ import numpy as np
 import pandas as pd
 
 from portfolio_risk import risk
-from portfolio_risk.models import (EWMA, FilteredHistoricalModel, GJRGarch, NormalModel,
-                                   StudentTModel, fit_gjr_garch, fit_t_dof, gjr_variance)
+from portfolio_risk.models import FilteredHistoricalModel, NormalModel, StudentTModel, fit_t_dof
 from portfolio_risk.simulation import simulate
+from portfolio_risk.volatility import HAR, EWMA, GJRGarch, fit_gjr_garch, gjr_variance
 
 
 class ConstantModel:
@@ -72,7 +72,9 @@ class ModelTest(unittest.TestCase):
     def test_models_have_zero_expected_simple_return(self):
         rng = np.random.default_rng(10)
         returns = pd.DataFrame(rng.standard_t(6, (2000, 2)) * 0.015, columns=["A", "B"])
-        for model in (NormalModel(returns), StudentTModel(returns), FilteredHistoricalModel(returns)):
+        rv = returns ** 2 * np.exp(rng.normal(0, 0.5, returns.shape)) + 1e-6
+        for model in (NormalModel(returns), StudentTModel(returns), FilteredHistoricalModel(returns),
+                      FilteredHistoricalModel(returns, vol=HAR(), rv=rv)):
             growth = np.exp(model.sample(rng, 400_000, 1)[:, 0])
             np.testing.assert_allclose(growth.mean(axis=0), 1, atol=1e-4, err_msg=model.name)
 
@@ -113,6 +115,45 @@ class GarchTest(unittest.TestCase):
             for _ in range(300):
                 var = vol.update(var, rng.standard_normal(var.shape) * np.sqrt(var))
             self.assertAlmostEqual(var.mean() / target, 1, delta=0.1, msg=vol.name)
+
+
+def simulate_har(n, coef, noise, rng):
+    """Returns and range variance from a known HAR process (log rv with leverage)."""
+    log_rv, z = np.zeros(n), np.zeros(n)
+    log_rv[:22] = coef[0] / (1 - sum(coef[1:4]))
+    for t in range(22, n):
+        falls = np.minimum(z[t - 5:t], 0)              # return / sqrt(rv) is just z here
+        x = [1, log_rv[t - 1], log_rv[t - 5:t].mean(), log_rv[t - 22:t].mean(), falls[-1], falls.mean()]
+        log_rv[t] = np.dot(coef, x) + noise * rng.standard_normal()
+        z[t] = rng.standard_normal()
+    return (np.exp(log_rv / 2) * z)[22:, None], np.exp(log_rv[22:, None])
+
+
+class HarTest(unittest.TestCase):
+    COEF = np.array([-1.0, 0.35, 0.3, 0.25, -0.15, -0.2])    # persistence 0.9, leverage
+
+    def test_fit_recovers_coefficients(self):
+        r, rv = simulate_har(30_000, self.COEF, 0.5, np.random.default_rng(14))
+        har = HAR().fit(r, rv)
+        np.testing.assert_allclose(har.coef[0, 1:4], self.COEF[1:4], atol=0.06)
+        self.assertLess(har.coef[0, 4], 0)                       # falls raise volatility
+
+    def test_simulation_starts_from_the_models_own_forecast(self):
+        rng = np.random.default_rng(15)
+        r, rv = simulate_har(3000, self.COEF, 0.5, rng)
+        har = HAR().fit(r, rv)
+        state = har.initial_state(r, rv, 4)
+        np.testing.assert_allclose(har.variance_of(state), np.tile(har.variance(r, rv)[-1], (4, 1)))
+
+    def test_paired_shocks_reproduce_history(self):
+        """Feeding the model its own historical surprises must reproduce the actual log rv."""
+        r, rv = simulate_har(500, self.COEF, 0.5, np.random.default_rng(16))
+        har = HAR().fit(r, rv)
+        surprises = har.paired_shocks(r, rv)
+        state = har.initial_state(r[:300], rv[:300], 1)
+        for t in range(300, 320):
+            state = har.step(state, r[t:t + 1], surprises[t:t + 1])
+        np.testing.assert_allclose(state[0][0, -1], np.log(rv[319]), rtol=1e-10)
 
 
 if __name__ == "__main__":

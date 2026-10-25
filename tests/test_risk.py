@@ -5,7 +5,7 @@ import pandas as pd
 from scipy import stats
 
 from portfolio_risk import risk
-from portfolio_risk.data import clean_prices
+from portfolio_risk.data import FIELDS, clean_prices, range_variance
 
 
 class RiskMeasureTest(unittest.TestCase):
@@ -48,6 +48,16 @@ class DataTest(unittest.TestCase):
         prices = pd.DataFrame({"A": [1.0, 1.1, 1.1, np.nan, 1.2],
                                "B": [2.0, 2.1, 2.1, 2.2, 2.3]}, index=idx)
         self.assertEqual(list(clean_prices(prices).index), [idx[0], idx[1], idx[4]])
+
+    def test_range_variance_uses_the_days_range_and_skips_bad_opens(self):
+        # day 2 opens at a bad print of 5.0 although the stock closed at 10.2 on both days
+        ohlc = pd.DataFrame([[10, 10, 10, 10], [10.0, 10.5, 9.8, 10.2], [5.0, 10.4, 5.0, 10.2]],
+                            index=pd.date_range("2024-01-01", periods=3),
+                            columns=pd.MultiIndex.from_product([FIELDS, ["A"]]), dtype=float)
+        rv = range_variance(ohlc)["A"]
+        garman_klass = 0.5 * np.log(10.5 / 9.8) ** 2 - (2 * np.log(2) - 1) * np.log(10.2 / 10) ** 2
+        self.assertAlmostEqual(rv.iloc[0], garman_klass)
+        self.assertLess(rv.iloc[1], 1e-3)       # not the ~0.27 the bad print would imply
 
 
 if __name__ == "__main__":

@@ -18,8 +18,9 @@ import numpy as np
 import pandas as pd
 
 from portfolio_risk import backtest, data, plots, risk
-from portfolio_risk.models import FilteredHistoricalModel, GJRGarch, NormalModel, StudentTModel
+from portfolio_risk.models import FilteredHistoricalModel, NormalModel, StudentTModel
 from portfolio_risk.simulation import simulate
+from portfolio_risk.volatility import HAR, GJRGarch, ewma_variance
 
 TICKERS = ["CBA", "BHP", "TLS", "WBC", "NAB", "STO"]
 START, END = "2000-01-01", "2026-10-24"   # fixed dates -> reproducible results (end is exclusive)
@@ -29,7 +30,7 @@ PATHS = 100_000
 SEED = 42
 WINDOW = 500                              # days used to fit the normal and Student-t models
 FHS_WINDOW = 1_000                        # days of shocks the filtered HS model draws from
-GARCH_WINDOW = 2_520                      # days used to fit the GARCH volatility model (~10 years)
+VOL_WINDOW = 2_520                        # days used to fit the GARCH and HAR models (~10 years)
 ORIGINAL_WINDOW = 205                     # ~300 calendar days, as in the first version
 STRESS_PERIODS = {
     "GFC, Lehman collapse to market low": ("2008-09-12", "2009-03-06"),
@@ -134,8 +135,10 @@ def main():
     w = weights.to_numpy()
     days = sorted({d for d in (1, 10, horizon) if d <= horizon})
 
-    prices = data.load_prices(tickers, args.start, args.end, refresh=args.refresh)
+    ohlc = data.load_ohlc(tickers, args.start, args.end, refresh=args.refresh)
+    prices = ohlc["Close"]
     log_r, simple_r = data.log_returns(prices), data.simple_returns(prices)
+    rv = data.range_variance(ohlc)
     needed = FHS_WINDOW + 60 + (0 if args.skip_backtest else 250)
     if len(log_r) < needed:
         raise SystemExit(f"Only {len(log_r)} trading days of data; need {needed}. Use an earlier --start.")
@@ -146,26 +149,28 @@ def main():
         NormalModel(log_r.iloc[-ORIGINAL_WINDOW:], drift=True, name="Original (normal + drift)"),
         NormalModel(recent),
         StudentTModel(recent),
-        FilteredHistoricalModel(log_r, window=FHS_WINDOW),
-        FilteredHistoricalModel(log_r, window=FHS_WINDOW, vol=GJRGarch(), fit_window=GARCH_WINDOW),
+        FilteredHistoricalModel(log_r, window=FHS_WINDOW, vol=GJRGarch(), fit_window=VOL_WINDOW),
+        FilteredHistoricalModel(log_r, window=FHS_WINDOW, vol=HAR(), fit_window=VOL_WINDOW, rv=rv),
     ]
     # every model gets the same seed, so each run of the script gives the same numbers
     sims = [simulate(m, weights, value, horizon, args.paths, np.random.default_rng(args.seed), days)
             for m in models]
-    original, normal, student_t, fhs_ewma, fhs = sims    # fhs (GJR-GARCH) is the main model
+    original, normal, student_t, fhs_garch, fhs = sims    # fhs (HAR) is the main model
     end_pnl = fhs.pnl(horizon)
 
     out = [f"Portfolio risk report: {', '.join(tickers)} (ASX)",
            f"Data: {len(log_r):,} trading days, {log_r.index[0]:%Y-%m-%d} to "
-           f"{log_r.index[-1]:%Y-%m-%d}, dividend-adjusted closes",
+           f"{log_r.index[-1]:%Y-%m-%d}, dividend-adjusted prices",
            f"Portfolio: {aud(value)} bought today and held (no rebalancing): "
            + ", ".join(f"{t} {x:.1%}" for t, x in weights.items()),
-           f"Models fitted on the last {WINDOW} days; filtered HS draws from {FHS_WINDOW:,} days of "
-           f"shocks with EWMA or GJR-GARCH volatility (GARCH fitted on {GARCH_WINDOW:,} days).",
+           f"Models fitted on the last {WINDOW} days. Filtered HS draws from {FHS_WINDOW:,} days of "
+           f"shocks, with GJR-GARCH or HAR volatility fitted on {VOL_WINDOW:,} days.",
+           f"HAR measures volatility from each day's open, high, low and close "
+           f"({int(data.suspicious_opens(ohlc).values.sum())} bad opening prices replaced).",
            f"Expected returns set to 0 (no drift). Main model: {fhs.model}, the best in the "
            "backtest (section 6).",
            f"Monte Carlo: {args.paths:,} paths per model, seed {args.seed}.",
-           f"Daily volatility: {fhs.pnl(1).std() / value:.2%} now (GJR-GARCH) vs {sigma_1d:.2%} "
+           f"Daily volatility: {fhs.pnl(1).std() / value:.2%} now (HAR) vs {sigma_1d:.2%} "
            f"on average over the last {WINDOW} days."]
     out += heading("Headline")
     out += wrap(f"Over the next {horizon} trading days there is a 1-in-100 chance of losing more than "
@@ -174,20 +179,17 @@ def main():
                 f"The original script's assumptions give a VaR 99% of "
                 f"{aud(risk.var_es(original.pnl(horizon), 0.01)[0])}.")
 
-    garch = models[-1].vol
     out += heading("1. Volatility by stock (annualised)")
     out += pd.DataFrame({
-        "now (GJR-GARCH)": [f"{v:.1%}" for v in models[-1].sigma * np.sqrt(252)],
-        "now (EWMA)": [f"{v:.1%}" for v in models[-2].sigma * np.sqrt(252)],
-        "long run": [f"{v:.1%}" for v in np.sqrt(garch.long_run_variance * 252)],
-        "half-life (days)": [f"{h:.0f}" for h in np.log(0.5) / np.log(garch.persistence)],
-        "alpha": [f"{x:.3f}" for x in garch.alpha],
-        "gamma": [f"{x:.3f}" for x in garch.gamma],
-        "beta": [f"{x:.3f}" for x in garch.beta],
+        "now (HAR)": [f"{v:.1%}" for v in models[-1].sigma * np.sqrt(252)],
+        "now (GJR-GARCH)": [f"{v:.1%}" for v in models[-2].sigma * np.sqrt(252)],
+        "now (EWMA)": [f"{v:.1%}" for v in np.sqrt(ewma_variance(log_r.to_numpy())[-1] * 252)],
+        "10-year average": [f"{v:.1%}" for v in log_r.iloc[-VOL_WINDOW:].std() * np.sqrt(252)],
+        "leverage": [f"{x:.3f}" for x in models[-2].vol.gamma],
     }, index=tickers).to_string().splitlines()
-    out += [""] + wrap("GJR-GARCH: tomorrow's variance = omega + (alpha, plus gamma if the stock fell) "
-                       "x today's squared return + beta x today's variance. Half-life: days for a "
-                       "volatility shock to fade by half.")
+    out += [""] + wrap("HAR forecasts tomorrow's volatility from the past day, week and month of "
+                       "volatility (measured from each day's price range) and from recent falls. "
+                       "Leverage (GARCH gamma): how much more a fall raises volatility than a rise.")
 
     out += heading("2. Value at Risk and Expected Shortfall (loss in AUD; ± is Monte Carlo standard error)")
     hist_pnl = value * (simple_r.iloc[-WINDOW:].to_numpy() @ w)
@@ -220,7 +222,7 @@ def main():
     out += heading(f"4. Path risk over {horizon} days (what a single end-date VaR misses)")
     floor = value * (1 - STOP_LOSS)
     path_risk = {}
-    for sim in (normal, student_t, fhs_ewma, fhs):
+    for sim in (normal, student_t, fhs_garch, fhs):
         drawdown = risk.max_drawdown(sim.values)
         path_risk[sim.model] = {
             "median max drawdown": f"{np.median(drawdown):.1%}",
@@ -252,7 +254,8 @@ def main():
 
     bt = None
     if not args.skip_backtest:
-        bt = backtest.run_backtest(simple_r, weights, WINDOW, FHS_WINDOW, ORIGINAL_WINDOW, GARCH_WINDOW)
+        bt = backtest.run_backtest(simple_r, weights, rv=rv, window=WINDOW, fhs_window=FHS_WINDOW,
+                                   original_window=ORIGINAL_WINDOW, vol_window=VOL_WINDOW)
         out += heading(f"6. Backtest of 1-day VaR, re-fitted every day: {bt.dates[0]:%Y-%m-%d} to "
                        f"{bt.dates[-1]:%Y-%m-%d} ({len(bt.losses):,} days)")
         out += backtest_table(backtest.summary(bt)).to_string().splitlines()

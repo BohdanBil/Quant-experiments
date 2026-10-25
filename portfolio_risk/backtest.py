@@ -10,8 +10,9 @@ import pandas as pd
 from scipy import stats
 from scipy.special import xlogy
 
-from .models import EWMA, GJRGarch, fit_t_dof
+from .models import fit_t_dof
 from .risk import normal_var_es, student_t_var_es, var_es
+from .volatility import EWMA, HAR, GJRGarch
 
 LEVELS = (0.05, 0.025, 0.01)          # tail probabilities: 95%, 97.5% and 99%
 
@@ -29,14 +30,16 @@ class Backtest:
         return self.forecasts[model][:, LEVELS.index(alpha), 1]
 
 
-def run_backtest(returns, weights, window=500, fhs_window=1000, original_window=205,
-                 garch_window=2520, lam=0.94, refit_every=20):
-    """1-day forecasts from six models, for every day once all of them have enough history.
+def run_backtest(returns, weights, rv=None, window=500, fhs_window=1000, original_window=205,
+                 vol_window=2520, lam=0.94, refit_every=20):
+    """1-day forecasts from up to seven models, for every day once all have enough history.
 
-    `returns` are daily simple returns. The Student-t degrees of freedom and the GARCH
-    parameters are refitted every `refit_every` days; volatilities update daily.
+    `returns` are daily simple returns; `rv` is the range-based daily variance (adds the HAR
+    model). Student-t, GARCH and HAR parameters are refitted every `refit_every` days on the
+    last `vol_window` days; volatilities update daily.
     """
     r = returns.to_numpy()
+    v = None if rv is None else rv.reindex(returns.index).to_numpy()
     w = weights.loc[returns.columns].to_numpy(dtype=float)
     port = r @ w
     ewma_sd = np.sqrt(EWMA(lam).variance(r))     # ewma_sd[t]: volatility forecast for day t
@@ -50,6 +53,8 @@ def run_backtest(returns, weights, window=500, fhs_window=1000, original_window=
         "ewma": f"Filtered HS + EWMA ({fhs_window}d)",
         "garch": f"Filtered HS + GJR-GARCH ({fhs_window}d)",
     }
+    if v is not None:
+        names["har"] = f"Filtered HS + HAR ({fhs_window}d)"
     out = {name: np.empty((len(r) - start, len(LEVELS), 2)) for name in names.values()}
     for i, t in enumerate(range(start, len(r))):
         past = port[t - window:t]
@@ -58,19 +63,26 @@ def run_backtest(returns, weights, window=500, fhs_window=1000, original_window=
         if i % refit_every == 0:
             x = r[t - window:t] - r[t - window:t].mean(axis=0)
             nu = fit_t_dof(x, np.cov(x, rowvar=False))
-            garch = GJRGarch().fit(r[max(0, t - garch_window):t])
+            fit_rows = slice(max(0, t - vol_window), t)
             stop = min(t + refit_every, len(r))
+            garch = GJRGarch().fit(r[fit_rows])
             garch_sd = np.sqrt(garch.variance(r[:stop]))
             garch_shocks = r[:stop] / garch_sd[:-1]
-        ewma = _filtered_sample(ewma_shocks, ewma_sd, t, w, fhs_window)
-        garch_fhs = _filtered_sample(garch_shocks, garch_sd, t, w, fhs_window)
+            if v is not None:
+                har = HAR().fit(r[fit_rows], v[fit_rows])
+                har_sd = np.sqrt(har.variance(r[:stop], v[:stop]))
+                har_shocks = r[:stop] / har_sd[:-1]
+        samples = {"ewma": _filtered_sample(ewma_shocks, ewma_sd, t, w, fhs_window),
+                   "garch": _filtered_sample(garch_shocks, garch_sd, t, w, fhs_window)}
+        if v is not None:
+            samples["har"] = _filtered_sample(har_shocks, har_sd, t, w, fhs_window)
         for j, alpha in enumerate(LEVELS):
             out[names["original"]][i, j] = normal_var_es(short.std(ddof=1), alpha, short.mean())
             out[names["normal"]][i, j] = normal_var_es(sigma, alpha)
             out[names["t"]][i, j] = student_t_var_es(sigma, nu, alpha)
             out[names["hs"]][i, j] = var_es(past, alpha)
-            out[names["ewma"]][i, j] = var_es(ewma, alpha)
-            out[names["garch"]][i, j] = var_es(garch_fhs, alpha)
+            for key, sample in samples.items():
+                out[names[key]][i, j] = var_es(sample, alpha)
     return Backtest(returns.index[start:], -port[start:], out)
 
 
